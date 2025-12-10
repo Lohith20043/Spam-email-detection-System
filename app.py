@@ -1,9 +1,10 @@
 import streamlit as st
 import joblib
+import numpy as np
 from datetime import datetime
 
 # -------------------------------------------------------
-# 🔹 PAGE CONFIG
+# PAGE CONFIG
 # -------------------------------------------------------
 st.set_page_config(
     page_title="Spam Email Detector",
@@ -12,7 +13,7 @@ st.set_page_config(
 )
 
 # -------------------------------------------------------
-# 🔹 CUSTOM CSS
+# CUSTOM CSS
 # -------------------------------------------------------
 st.markdown("""
     <style>
@@ -48,26 +49,48 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------
-# 🔹 SESSION HISTORY
+# SESSION HISTORY
 # -------------------------------------------------------
 if 'history' not in st.session_state:
     st.session_state.history = []
 
 # -------------------------------------------------------
-# 🔹 LOAD TRAINED MODEL
+# LOAD YOUR EXISTING MODELS
 # -------------------------------------------------------
-model = joblib.load("spam_model.joblib")
+model_nb = joblib.load("naive_bayes_model.joblib")
+model_lr = joblib.load("logistic_regression_model.joblib")
+model_svm = joblib.load("svm.joblib")
 vectorizer = joblib.load("vectorizer.joblib")
 
-def classify_email(email):
-    x = vectorizer.transform([email])
-    pred = model.predict(x)[0]     # 1 = spam, 0 = not spam
-    conf = model.predict_proba(x)[0][1]  # spam probability
+
+# -------------------------------------------------------
+# PREDICTION FUNCTIONS
+# -------------------------------------------------------
+def preprocess(email):
+    return vectorizer.transform([email])
+
+def predict_nb(email):
+    X = preprocess(email)
+    pred = model_nb.predict(X)[0]
+    conf = model_nb.predict_proba(X)[0][1]
+    return pred, conf
+
+def predict_lr(email):
+    X = preprocess(email)
+    conf = model_lr.predict_proba(X)[0][1]
+    pred = 1 if conf >= 0.50 else 0
+    return pred, conf
+
+def predict_svm(email):
+    X = preprocess(email)
+    pred = model_svm.predict(X)[0]
+    score = model_svm.decision_function(X)[0]
+    conf = 1 / (1 + np.exp(-score))
     return pred, conf
 
 
 # -------------------------------------------------------
-# 🔹 SIDEBAR NAVIGATION
+# SIDEBAR
 # -------------------------------------------------------
 menu = st.sidebar.radio(
     "📌 Navigation",
@@ -76,77 +99,116 @@ menu = st.sidebar.radio(
 )
 
 # -------------------------------------------------------
-# 🔹 HOME PAGE
+# HOME PAGE
 # -------------------------------------------------------
 if menu == "Home":
     st.markdown("<h1 class='main-title'>📧 Spam Email Detection Portal</h1>", unsafe_allow_html=True)
-    st.write("Enter any email text below and get spam detection with confidence score.")
+    st.write("Enter the email content below to analyze spam using Naive Bayes, Logistic Regression, and SVM.")
 
     email_input = st.text_area("✍️ Enter Email Content")
 
     if st.button("🔍 Analyze"):
         if email_input.strip() == "":
-            st.warning("Please enter valid email content!")
+            st.warning("Please enter email content.")
         else:
-            pred, conf = classify_email(email_input)
+            # Predictions from 3 models
+            nb_pred, nb_conf = predict_nb(email_input)
+            lr_pred, lr_conf = predict_lr(email_input)
+            svm_pred, svm_conf = predict_svm(email_input)
 
-            if pred == 1:
-                result = "SPAM"
+            spam_votes = nb_pred + lr_pred + svm_pred
+            avg_conf_spam = (nb_conf + lr_conf + svm_conf) / 3
+            avg_conf_not = (1 - nb_conf + 1 - lr_conf + 1 - svm_conf) / 3
+
+            # Final decision by voting
+            if spam_votes >= 2:
+                final = "SPAM"
+                conf = avg_conf_spam
                 st.error(f"🚨 Final Decision: **SPAM** ({round(conf*100,2)}%)")
             else:
-                result = "NOT SPAM"
-                st.success(f"✅ Final Decision: **NOT SPAM** ({round((1-conf)*100,2)}%)")
+                final = "NOT SPAM"
+                conf = avg_conf_not
+                st.success(f"✅ Final Decision: **NOT SPAM** ({round(conf*100,2)}%)")
 
-            # Save history
+            st.markdown("---")
+            st.subheader("📊 Model-wise Predictions")
+
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                st.markdown(f"""
+                <div class="card">
+                    <h4 class="sub-header">🧠 Naive Bayes</h4>
+                    <b>{'Spam' if nb_pred else 'Not Spam'}</b><br>
+                    Confidence: {round(nb_conf*100,2)} %
+                </div>
+                """, unsafe_allow_html=True)
+
+            with col2:
+                st.markdown(f"""
+                <div class="card">
+                    <h4 class="sub-header">📈 Logistic Regression</h4>
+                    <b>{'Spam' if lr_pred else 'Not Spam'}</b><br>
+                    Confidence: {round(lr_conf*100,2)} %
+                </div>
+                """, unsafe_allow_html=True)
+
+            with col3:
+                st.markdown(f"""
+                <div class="card">
+                    <h4 class="sub-header">📊 SVM</h4>
+                    <b>{'Spam' if svm_pred else 'Not Spam'}</b><br>
+                    Confidence: {round(svm_conf*100,2)} %
+                </div>
+                """, unsafe_allow_html=True)
+
+            # Save to history
             st.session_state.history.append({
                 "email": email_input,
-                "result": result,
-                "confidence": round(conf*100, 2),
+                "result": final,
+                "confidence": round(conf * 100, 2),
                 "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             })
 
+
 # -------------------------------------------------------
-# 🔹 HISTORY PAGE
+# HISTORY PAGE
 # -------------------------------------------------------
 elif menu == "History":
     st.header("📜 Analysis History")
-
     if len(st.session_state.history) == 0:
         st.info("No history yet.")
     else:
         for i, item in enumerate(reversed(st.session_state.history), 1):
             st.markdown(f"""
-                <div class="history-box">
+            <div class="history-box">
                 <b>{i}. {item['result']} ({item['confidence']}%)</b><br>
                 <i>{item['email'][:200]}...</i><br>
                 <small>Time: {item['time']}</small>
-                </div><br>
+            </div><br>
             """, unsafe_allow_html=True)
 
 # -------------------------------------------------------
-# 🔹 ABOUT PAGE
+# ABOUT PAGE
 # -------------------------------------------------------
 else:
-    st.header("ℹ️ About the Spam Detector")
+    st.header("ℹ️ About This Project")
     st.write("""
-This system uses Machine Learning (Naive Bayes + TF-IDF)  
-to classify emails as **Spam** or **Not Spam**.
+This system uses **three ML models** trained on your dataset:
 
-### ✔ Features
-- Fast and accurate spam detection  
-- Custom training using your own examples  
-- Confidence score calculation  
-- Clean UI with history tracking
+- 🧠 Naive Bayes  
+- 📈 Logistic Regression  
+- 📊 Support Vector Machine (SVM)  
 
-### ✔ Technology Used
-- Python  
-- Scikit-learn  
-- Streamlit  
-- Naive Bayes Model  
-- TF-IDF Vectorizer  
+It performs:
+
+✔ TF-IDF Vectorization  
+✔ 3-Model Voting System  
+✔ Confidence Score Calculation  
+✔ Email History Tracking  
     """)
 
 # -------------------------------------------------------
-# 🔹 FOOTER
+# FOOTER
 # -------------------------------------------------------
-st.markdown("<div class='footer'>👨‍💻 Developed by Our Team | ML Spam Detection Tool</div>", unsafe_allow_html=True)
+st.markdown("<div class='footer'>👨‍💻 Developed by Team | Spam Detection ML Project</div>", unsafe_allow_html=True)
